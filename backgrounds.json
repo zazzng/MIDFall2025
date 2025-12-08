@@ -1,0 +1,173 @@
+{
+  "SCJ": {
+    "book": "심청전",
+    "background": "Boat on the Sea",
+    "interaction": "Sacrificing oneself by jumping into the sea",
+    "interaction_label": "sacrifice",
+    "interaction_summary": "A tragic moment of self-sacrifice—throwing oneself into the cold, dark sea to save a loved one. The weight of the decision, the final goodbye, the irreversible leap.",
+    "interaction_emotions": [
+      "solemn determination and quiet acceptance",
+      "trembling fear mixed with resolve",
+      "heartbroken but unwavering courage",
+      "tearful goodbye and deep love",
+      "cold dread and desperate hope",
+      "numb shock at the situation",
+      "angry defiance against fate",
+      "peaceful surrender to destiny",
+      "confused panic and disbelief",
+      "bittersweet gratitude and sorrow"
+    ]
+  },
+  "HBJ": {
+    "book": "흥부전",
+    "background": "Gourd Field",
+    "interaction": "Gently waving to an injured swallow",
+    "interaction_label": "gentle_contact",
+    "interaction_summary": "A tender moment of compassion—reaching out to help a small, wounded creature. The kindness of the poor, the hope for good fortune in return.",
+    "interaction_emotions": [
+      "warm compassion and gentle concern",
+      "hopeful excitement at the encounter",
+      "shy curiosity and careful approach",
+      "protective tenderness and soft voice",
+      "quiet joy at making a connection",
+      "anxious worry about the creature",
+      "playful delight and wonder",
+      "nostalgic longing and soft smile",
+      "humble gratitude for the moment",
+      "bored indifference or mild annoyance"
+    ]
+  },
+  "BJBJ": {
+    "book": "별주부전",
+    "background": "Underwater Palace of the Dragon King",
+    "interaction": "Swimming and exploring the mysterious underwater palace",
+    "interaction_label": "fantasy_explore",
+    "interaction_summary": "A surreal journey into the Dragon King's realm—beautiful but dangerous. Wonder at the impossible sights, but growing unease as the trap becomes clear.",
+    "interaction_emotions": [
+      "wide-eyed wonder and amazement",
+      "nervous excitement mixed with fear",
+      "suspicious caution and alertness",
+      "childlike curiosity and fascination",
+      "growing unease and paranoia",
+      "greedy desire for treasures",
+      "confused disorientation",
+      "calm observation and analysis",
+      "terrified realization of danger",
+      "bold adventurous spirit"
+    ]
+  },
+  "OGJJ": {
+    "book": "옹고집전",
+    "background": "Pagoda at the Temple",
+    "interaction": "Fighting fiercely - shouting, shoving, and wrestling",
+    "interaction_label": "fight",
+    "interaction_summary": "A heated brawl fueled by stubbornness and pride—voices raised, fists flying, shoving and wrestling. Neither side willing to back down, the conflict turning physical.",
+    "interaction_emotions": [
+      "explosive anger and frustration",
+      "cold fury and bitter resentment",
+      "righteous indignation",
+      "defensive hurt masked as anger",
+      "stubborn refusal to yield",
+      "mocking contempt and disdain",
+      "tearful rage and betrayal",
+      "weary exhaustion from conflict",
+      "calculating manipulation",
+      "desperate plea hidden in shouts"
+    ]
+  },
+  "JWCJ": {
+    "book": "전우치전",
+    "background": "Mountains",
+    "interaction": "Leaping between mountain peaks with magic",
+    "interaction_label": "magic_travel",
+    "interaction_summary": "Soaring across the vast mountain range with Taoist magic—leaping from peak to peak, feeling the wind and freedom, surveying the world below like a wandering immortal.",
+    "interaction_emotions": [
+      "exhilarating freedom and joy",
+      "serene peace gazing at the view",
+      "playful mischief mid-flight",
+      "proud confidence in magical abilities",
+      "awestruck wonder at nature's beauty",
+      "nervous vertigo looking down",
+      "meditative calm and clarity",
+      "restless wanderlust and adventure",
+      "triumphant mastery of the skies",
+      "bittersweet loneliness at the top"
+    ]
+  },
+  "JHHRJ": {
+    "book": "장화홍련전",
+    "background": "Lake in the Forest",
+    "interaction": "Walking cautiously around the haunted lake",
+    "interaction_label": "cautious_movement",
+    "interaction_summary": "A place of tragedy and sorrow—where innocent lives were lost. Every step feels heavy with memory, the water still and dark, hiding terrible secrets.",
+    "interaction_emotions": [
+      "creeping dread and unease",
+      "mournful sorrow and heavy heart",
+      "nervous alertness to every sound",
+      "quiet reverence for the dead",
+      "curious fascination with the eerie",
+      "suppressed fear trying to stay calm",
+      "cold anger at past injustice",
+      "protective vigilance over companions",
+      "overwhelming sadness and tears",
+      "determined courage despite fear"
+    ]
+  },
+  "PSJ": {
+    "book": "박씨전",
+    "background": "Garden of the Noble House",
+    "interaction": "Flying freely through the clouds",
+    "interaction_label": "flying",
+    "interaction_summary": "A magical escape from earthly troubles—soaring above the world, leaving judgment and cruelty behind. The freedom of the sky, the beauty of clouds.",
+    "interaction_emotions": [
+      "pure joy and exhilaration",
+      "peaceful serenity and calm",
+      "liberating relief from troubles",
+      "awestruck wonder at the view",
+      "playful loops and spins",
+      "nervous vertigo and fear of falling",
+      "proud confidence in flight",
+      "bittersweet escape from reality",
+      "dreamy contentment",
+      "wild untamed freedom"
+    ]
+  },
+  "DGJ": {
+    "book": "두껍전",
+    "background": "Party inside the Mountain",
+    "interaction": "Dancing wildly at the mountain feast",
+    "interaction_label": "dancing",
+    "interaction_summary": "A lively celebration deep in the mountains—music, dancing, feasting. Everyone letting loose, showing off, caught up in the festive chaos.",
+    "interaction_emotions": [
+      "infectious joy and laughter",
+      "competitive showing off",
+      "shy hesitation to join in",
+      "wild abandon and energy",
+      "warm camaraderie with others",
+      "drunk or dizzy merriment",
+      "theatrical dramatic flair",
+      "nostalgic happiness",
+      "awkward clumsiness but trying",
+      "proud display of skill"
+    ]
+  },
+  "KWJ": {
+    "book": "김원전",
+    "background": "Big Castle",
+    "interaction": "Gazing up at the towering castle and planning the approach",
+    "interaction_label": "observe_plan",
+    "interaction_summary": "Standing before a grand, towering castle—observing its massive walls, gates, and defenses. Analyzing the structure, planning how to enter, feeling both awe at its grandeur and determination to breach its walls.",
+    "interaction_emotions": [
+      "awe and wonder at the castle's grandeur",
+      "strategic calculation and observation",
+      "determined resolve to find a way in",
+      "curious fascination with the architecture",
+      "humble respect mixed with ambition",
+      "cautious assessment of dangers",
+      "excited anticipation of the challenge",
+      "solemn focus on the mission",
+      "anxious but determined planning",
+      "confident analysis of the fortress"
+    ]
+  }
+}
