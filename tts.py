@@ -41,6 +41,9 @@ class VideoPlayer:
         self.running = False
         self.thread = None
         self.audio_process = None  # 오디오 재생 프로세스
+        self.bgm_process = None  # BGM 재생 프로세스 (스레드 또는 프로세스)
+        self.bgm_proc_ref = None  # BGM 프로세스 참조 (실제 종료용)
+        self.pending_bgm_path = None  # 제목 말하기 후 재생할 BGM 경로
         self.fade_alpha = 1.0  # 페이드 알파 값 (0.0 ~ 1.0)
         self.is_fading = False  # 페이드 중인지 여부
         self.fade_duration = 0.5  # 페이드 지속 시간 (초)
@@ -106,8 +109,178 @@ class VideoPlayer:
         else:
             print(f"🎬 비디오 전환: {video_path}")
             
-            # 오디오 재생 시작 (무한 루프)
-            self._start_audio(video_path)
+            # 비디오 파일명에서 책 코드 추출하여 BGM 경로 저장 (제목 말하기 후 재생)
+            video_filename = os.path.basename(video_path)
+            book_code = None
+            for code, vfile in BOOK_TO_VIDEO.items():
+                if vfile == video_filename:
+                    book_code = code
+                    break
+            
+            if book_code:
+                bgm_file = BOOK_TO_BGM.get(book_code)
+                if bgm_file:
+                    bgm_path = os.path.join(BGM_DIR, bgm_file)
+                    if os.path.exists(bgm_path):
+                        # BGM 경로를 저장 (제목 말하기 후 재생)
+                        self.pending_bgm_path = bgm_path
+                    else:
+                        print(f"⚠️ BGM 파일을 찾을 수 없음: {bgm_path}")
+                else:
+                    print(f"⚠️ '{book_code}'에 해당하는 BGM이 없습니다.")
+            else:
+                print(f"⚠️ 비디오 파일명에서 책 코드를 찾을 수 없음: {video_filename}")
+    
+    def _start_bgm(self, bgm_path: str):
+        """BGM을 무한 루프로 재생 (페이드인 효과 포함)"""
+        # 기존 BGM을 페이드아웃하면서 종료
+        old_bgm_process = self.bgm_process
+        old_bgm_proc_ref = self.bgm_proc_ref
+        if old_bgm_process or old_bgm_proc_ref:
+            def fade_out_old_bgm():
+                try:
+                    # 페이드아웃 시간 동안 대기 (0.5초)
+                    time.sleep(0.5)
+                    # 실제 프로세스 종료
+                    if old_bgm_proc_ref:
+                        if isinstance(old_bgm_proc_ref, dict):
+                            # 딕셔너리인 경우 (macOS bgm_control)
+                            old_bgm_proc_ref["running"] = False
+                            if old_bgm_proc_ref.get("current_proc"):
+                                try:
+                                    old_bgm_proc_ref["current_proc"].terminate()
+                                    old_bgm_proc_ref["current_proc"].wait(timeout=0.5)
+                                except:
+                                    try:
+                                        old_bgm_proc_ref["current_proc"].kill()
+                                    except:
+                                        pass
+                        elif isinstance(old_bgm_proc_ref, list):
+                            # 리스트인 경우 [proc, afplay_proc]
+                            for p in old_bgm_proc_ref:
+                                if p and hasattr(p, "terminate"):
+                                    try:
+                                        p.terminate()
+                                        p.wait(timeout=0.5)
+                                    except:
+                                        try:
+                                            p.kill()
+                                        except:
+                                            pass
+                        elif hasattr(old_bgm_proc_ref, "terminate"):
+                            try:
+                                old_bgm_proc_ref.terminate()
+                                old_bgm_proc_ref.wait(timeout=0.5)
+                            except:
+                                try:
+                                    old_bgm_proc_ref.kill()
+                                except:
+                                    pass
+                except Exception as e:
+                    print(f"⚠️ BGM 페이드아웃 오류: {e}")
+            
+            threading.Thread(target=fade_out_old_bgm, daemon=True).start()
+            self.bgm_process = None
+            self.bgm_proc_ref = None
+        
+        # BGM을 무한 루프로 재생 (페이드인 효과 포함)
+        import platform
+        is_macos = platform.system() == "Darwin"
+        
+        try:
+            if is_macos:
+                # macOS: afplay를 직접 사용하여 무한 루프 재생 (더 안정적)
+                fade_duration = 0.5
+                
+                # 종료 플래그를 위한 딕셔너리
+                bgm_control = {"running": True, "current_proc": None}
+                
+                def play_bgm_with_fade():
+                    try:
+                        # 임시 파일에 페이드인 효과를 적용한 BGM 생성 (첫 루프만)
+                        import tempfile
+                        temp_dir = tempfile.gettempdir()
+                        temp_bgm = os.path.join(temp_dir, f"bgm_fade_{os.getpid()}.wav")
+                        
+                        # 첫 루프에만 페이드인 적용
+                        subprocess.run(
+                            ["ffmpeg", "-y", "-i", bgm_path,
+                             "-af", f"afade=t=in:st=0:d={fade_duration}",
+                             "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+                             temp_bgm],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=True
+                        )
+                        
+                        # 첫 번째는 페이드인 적용된 파일 재생
+                        first_play = True
+                        while bgm_control["running"]:
+                            if first_play:
+                                proc = subprocess.Popen(
+                                    ["afplay", temp_bgm],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL
+                                )
+                                bgm_control["current_proc"] = proc
+                                proc.wait()
+                                first_play = False
+                            else:
+                                # 이후는 원본 파일 무한 루프
+                                proc = subprocess.Popen(
+                                    ["afplay", bgm_path],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL
+                                )
+                                bgm_control["current_proc"] = proc
+                                proc.wait()
+                                
+                                # 종료 신호 확인
+                                if not bgm_control["running"]:
+                                    break
+                        
+                        # 임시 파일 삭제
+                        try:
+                            os.remove(temp_bgm)
+                        except:
+                            pass
+                    except Exception as e:
+                        print(f"⚠️ BGM 재생 오류: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+                # 별도 스레드에서 BGM 재생
+                bgm_thread = threading.Thread(target=play_bgm_with_fade, daemon=True)
+                bgm_thread.start()
+                self.bgm_process = bgm_thread
+                # 프로세스 참조는 제어 딕셔너리로 관리
+                with self.lock:
+                    self.bgm_proc_ref = bgm_control
+                print(f"🎵 BGM 재생 시작 (페이드인): {bgm_path}")
+            else:
+                # Linux: ffplay 사용
+                proc = subprocess.Popen(
+                    ["ffmpeg", "-stream_loop", "-1", "-i", bgm_path,
+                     "-af", "afade=t=in:st=0:d=0.5",
+                     "-f", "wav", "-"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL
+                )
+                ffplay_proc = subprocess.Popen(
+                    ["ffplay", "-nodisp", "-autoexit", "-loop", "0", "-loglevel", "quiet", "-"],
+                    stdin=proc.stdout,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                self.bgm_process = ffplay_proc
+                self.bgm_proc_ref = [proc, ffplay_proc]
+                print(f"🎵 BGM 재생 시작 (페이드인): {bgm_path}")
+        except FileNotFoundError:
+            print("⚠️ ffmpeg/afplay를 찾을 수 없습니다. BGM은 재생되지 않습니다.")
+            if is_macos:
+                print("   macOS에서는 'brew install ffmpeg'로 설치하세요.")
+            else:
+                print("   Linux에서는 'sudo apt-get install ffmpeg' 또는 'sudo yum install ffmpeg'로 설치하세요.")
     
     def _start_audio(self, video_path: str):
         """비디오의 오디오를 무한 루프로 재생"""
@@ -213,6 +386,44 @@ class VideoPlayer:
                     except:
                         pass
             self.audio_process = None
+        
+        # BGM 프로세스 종료
+        if self.bgm_proc_ref:
+            if isinstance(self.bgm_proc_ref, dict):
+                # 딕셔너리인 경우 (macOS bgm_control)
+                self.bgm_proc_ref["running"] = False
+                if self.bgm_proc_ref.get("current_proc"):
+                    try:
+                        self.bgm_proc_ref["current_proc"].terminate()
+                        self.bgm_proc_ref["current_proc"].wait(timeout=0.5)
+                    except:
+                        try:
+                            self.bgm_proc_ref["current_proc"].kill()
+                        except:
+                            pass
+            elif isinstance(self.bgm_proc_ref, list):
+                # 리스트인 경우 [proc, afplay_proc]
+                for p in self.bgm_proc_ref:
+                    if p and hasattr(p, "terminate"):
+                        try:
+                            p.terminate()
+                            p.wait(timeout=0.5)
+                        except:
+                            try:
+                                p.kill()
+                            except:
+                                pass
+            elif hasattr(self.bgm_proc_ref, "terminate"):
+                try:
+                    self.bgm_proc_ref.terminate()
+                    self.bgm_proc_ref.wait(timeout=0.5)
+                except:
+                    try:
+                        self.bgm_proc_ref.kill()
+                    except:
+                        pass
+            self.bgm_proc_ref = None
+        self.bgm_process = None
     
     def set_video(self, video_path: str):
         """비디오 파일 변경 (페이드 효과와 함께 부드러운 전환)"""
@@ -238,6 +449,7 @@ VIDEO_PLAYER = VideoPlayer()
 
 # 배경 비디오 설정
 BG_VIDEO_DIR = "bg_video"
+BGM_DIR = "bgm"
 BOOK_TO_VIDEO = {
     "BJBJ": "10_BJBJ_matchedSize.mov",
     "PSJ": "11_PSJ_matchedSize.mov",
@@ -248,6 +460,17 @@ BOOK_TO_VIDEO = {
     "OGJJ": "5_OGJJ_matchedSize.mov",
     "JHHRJ": "6_JHHRJ_matchedSize.mov",
     "SCJ": "7_SCJ_matchedSize.mov",
+}
+BOOK_TO_BGM = {
+    "BJBJ": "10_BJBJ_audioExtracted.wav",
+    "PSJ": "11_BSJ_audioExtracted.wav",  # 파일명이 BSJ로 되어 있음
+    "DGJ": "13_DGJ_audioExtracted.wav",
+    "HBJ": "17_HBJ_audioExtracted.wav",
+    "JWCJ": "19_JWCJ_audioExtracted.wav",
+    "KWJ": "3_KWJ_audioExtracted.wav",
+    "OGJJ": "5_OGJJ_audioExtracted.wav",
+    "JHHRJ": "6_JHHRJ_audioExtracted.wav",
+    "SCJ": "7_SCJ_audioExtracted.wav",
 }
 
 
@@ -499,21 +722,18 @@ def generate_action_line(character: dict, bg_info: dict) -> str:
     return _clean_line(resp.output_text)
 
 
-def generate_dialogue_lines(char_a: dict, char_b: dict, bg_info: dict) -> tuple[str, str]:
+def generate_first_dialogue_line(char_a: dict, bg_info: dict) -> str:
     """
-    같은 배경/인터랙션에서 char_a가 먼저 한 마디,
-    char_b가 자연스럽게 이어서 한 마디.
-    → 둘 다 짧고 구어체.
+    같은 배경/인터랙션에서 char_a가 먼저 한 마디를 생성.
+    → 짧고 구어체.
     Avoid any narration or book-style phrases. The line must sound like spontaneous spoken Korean, not a written script.
     Add small hesitations (예: '아...', '음...') when appropriate, only if it fits the character.
-
     """
     place = bg_info.get("background", "")
     action = bg_info.get("interaction", "")
     profile = get_interaction_profile(bg_info)
     emotion_list = "\n".join([f"  - {e}" for e in profile['emotion_options']])
 
-    # A의 첫 마디
     char_a_data = CHARACTERS.get(char_a['book_code'], {}).get(char_a['role_key'], {})
     char_a_speech = char_a_data.get('speech_patterns', {})
     char_a_style = char_a_speech.get('speaking_style', '')
@@ -544,6 +764,7 @@ def generate_dialogue_lines(char_a: dict, char_b: dict, bg_info: dict) -> tuple[
 말투 규칙:
 - 문어체(예: '~것이다', '~합니다') 대신 자연스러운 구어체를 사용하세요.
 - 캐릭터의 말투 스타일을 정확히 따르세요. 특히 '~이기야' 같은 비문법적 표현을 쓰지 말고 '~이지' 같은 올바른 표현을 사용하세요.
+- '~이기에요' 같은 비문법적 표현을 쓰지 말고 '~이에요' 같은 올바른 표현을 사용하세요.
 - 맥락에 맞지 않는 이상한 표현(예: '고백할 기회', '아버지한테 고백' 등)을 피하고, 
   현재 배경과 인터랙션에 자연스럽게 어울리는 대사를 생성하세요.
 - 최대한 짧고 간단하게, 일상 대화처럼. (예: '~할까?', '~하는 거지', '~같은데' 등)
@@ -560,15 +781,27 @@ def generate_dialogue_lines(char_a: dict, char_b: dict, bg_info: dict) -> tuple[
         temperature=0.7
     )
     line_a = _clean_line(resp_a.output_text)
+    return line_a
 
-    # B의 응답
+
+def generate_second_dialogue_line(char_b: dict, line_a: str, bg_info: dict) -> str:
+    """
+    char_b가 char_a의 말(line_a)에 반응하는 한 마디를 생성.
+    → 짧고 구어체.
+    """
+    place = bg_info.get("background", "")
+    action = bg_info.get("interaction", "")
+    profile = get_interaction_profile(bg_info)
+    emotion_list = "\n".join([f"  - {e}" for e in profile['emotion_options']])
+
     char_b_data = CHARACTERS.get(char_b['book_code'], {}).get(char_b['role_key'], {})
     char_b_speech = char_b_data.get('speech_patterns', {})
     char_b_style = char_b_speech.get('speaking_style', '')
     
     system_b = (
         "당신은 한국 옛이야기 속 두 인물이 실제로 주고받는 대화를 쓰는 작가입니다. "
-        "두 번째 인물이 첫 번째 인물의 말에 바로 반응하는 짧은 한 마디를 만드세요."
+        "두 번째 인물이 첫 번째 인물의 말을 듣고 직접적으로 반응하는 짧은 한 마디를 만드세요. "
+        "반드시 첫 번째 인물의 말에 대한 응답이어야 하며, 혼잣말이 아닌 대화여야 합니다."
     )
     user_b = f"""
 배경 장소: {place}
@@ -578,19 +811,28 @@ def generate_dialogue_lines(char_a: dict, char_b: dict, bg_info: dict) -> tuple[
 {emotion_list}
 
 첫 번째 인물의 말:
-{line_a}
+"{line_a}"
 
 두 번째 인물 설정(영어): {char_b['personality']}
 두 번째 인물 정보: {char_b['age']}살 {char_b['gender']}
 두 번째 인물 말투 스타일: {char_b_style}
 
-상황:
-- 두 번째 인물이 위 말을 듣고, 자신의 성격에 맞는 감정으로 바로 이어서 한 마디를 합니다.
+중요한 상황:
+- 두 번째 인물은 위의 첫 번째 인물의 말을 직접 듣고 있습니다.
+- 첫 번째 인물의 말에 대해 반응하는 대답을 해야 합니다.
+- 혼잣말이 아니라 첫 번째 인물에게 말하는 대화여야 합니다.
+- 첫 번째 인물의 말의 내용, 톤, 의도를 고려하여 적절히 반응하세요.
+- 동의, 반박, 질문, 제안, 놀람 등 첫 번째 인물의 말에 대한 자연스러운 반응을 보여주세요.
 
 말투 규칙:
-- 첫 번째 인물의 말에 자연스럽게 이어지는 반응이어야 합니다.
+- 첫 번째 인물의 말에 직접적으로 반응하는 대답이어야 합니다.
+- 첫 번째 인물의 말의 내용을 언급하거나 참조하는 것이 좋습니다.
+- 예: 첫 번째가 "~할까?"라고 물으면 → "그래, 해보자" / "안 돼" / "~하는 게 좋겠어" 등
+- 예: 첫 번째가 "~해야 해"라고 말하면 → "맞아" / "그렇지 않아" / "~하는 게 나을 것 같은데" 등
+- 예: 첫 번째가 "~했어"라고 말하면 → "정말?" / "그래?" / "~했구나" 등
 - 문어체 금지, 자연스러운 구어체만. (예: '~지?', '~잖아', '~라니까', '~해요' 등)
 - 캐릭터의 말투 스타일을 정확히 따르세요. 특히 '~이기야' 같은 비문법적 표현을 쓰지 말고 '~이지' 같은 올바른 표현을 사용하세요.
+- '~이기에요' 같은 비문법적 표현을 쓰지 말고 '~이에요' 같은 올바른 표현을 사용하세요.
 - 한 문장만, 짧게.
 - 따옴표는 쓰지 마세요.
 """
@@ -604,7 +846,18 @@ def generate_dialogue_lines(char_a: dict, char_b: dict, bg_info: dict) -> tuple[
         temperature=0.7
     )
     line_b = _clean_line(resp_b.output_text)
+    return line_b
 
+
+def generate_dialogue_lines(char_a: dict, char_b: dict, bg_info: dict) -> tuple[str, str]:
+    """
+    같은 배경/인터랙션에서 char_a가 먼저 한 마디,
+    char_b가 자연스럽게 이어서 한 마디.
+    → 둘 다 짧고 구어체.
+    (하위 호환성을 위해 유지, 하지만 순차 생성/재생을 위해 generate_first_dialogue_line과 generate_second_dialogue_line을 사용하는 것을 권장)
+    """
+    line_a = generate_first_dialogue_line(char_a, bg_info)
+    line_b = generate_second_dialogue_line(char_b, line_a, bg_info)
     return line_a, line_b
 
 
@@ -644,6 +897,7 @@ def generate_surprised_line(character: dict, bg_info: dict) -> str:
 - 이 캐릭터는 방금 전까지 전혀 다른 곳에 있었는데,
   갑자기 이 장면으로 순간이동하듯 옮겨졌습니다.
 - 위 감정 중 자신의 성격에 맞는 것을 느끼며, 놀라거나 당황하거나 신기해서 감탄과 함께 한 마디를 합니다.
+- 배경 장소와 인터랙션을 파악하고, 이곳에서 무슨 일이 일어나는지 이해한 후 놀라움을 표현합니다.
 
 말투 규칙:
 - 이 캐릭터의 성격과 말투 스타일에 맞는 구체적인 감탄사를 사용하세요.
@@ -653,8 +907,9 @@ def generate_surprised_line(character: dict, bg_info: dict) -> str:
       차분한 캐릭터는 '어라, 여기가 어디일까?', '이상하네, 분위기가 달라', '음... 이곳은 뭔가 특별해' 등
 - '어라, 이게 무슨 신기한 일인가?', '오호, 이거 재밌네!' 같은 일반적인 멘트는 피하고, 
   현재 배경 장소와 인터랙션을 구체적으로 언급하는 놀라움 표현을 사용하세요.
+- 배경 장소나 인터랙션을 언급하면서 놀라움을 표현하세요.
 - 문어체 금지, 자연스러운 구어체.
-- 한 문장만, 아주 짧게.
+- 한 문장, 적당한 길이 (1~2초에 말할 수 있는 길이).
 - 따옴표는 쓰지 마세요.
 """
 
@@ -728,7 +983,23 @@ def generate_tts(character: dict, text: str, output_path: str):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     speaker_tag = f"{character['book_code'].upper()}-{character['role_key'].upper()}"
-    print(f"🎤 [{speaker_tag}] line: {text}")
+    
+    # 영어 번역 생성
+    try:
+        translation_resp = client.responses.create(
+            model=TEXT_MODEL,
+            input=[
+                {"role": "system", "content": "You are a translator. Translate the given Korean dialogue to natural English, preserving the character's tone and emotion."},
+                {"role": "user", "content": f"Translate this Korean dialogue to English: {text}"}
+            ],
+            max_output_tokens=50,
+            temperature=0.3
+        )
+        english_text = _clean_line(translation_resp.output_text)
+        print(f"🎤 [{speaker_tag}] line: {text} | {english_text}")
+    except Exception as e:
+        print(f"🎤 [{speaker_tag}] line: {text}")
+        print(f"⚠️ Translation failed: {e}")
 
     voice_speed = character.get("speed", 1.0)
 
@@ -776,6 +1047,7 @@ def handle_book_input(book_code: str, index_in_sequence: int):
 
     print("\n==============================")
     print(f"[handle_book_input] book_code={book_code}, index={index_in_sequence}")
+    
 
     # -------------------------
     # 1) index 1: 초기 배경
@@ -793,6 +1065,35 @@ def handle_book_input(book_code: str, index_in_sequence: int):
 
         print(f"[BACKGROUND INIT] {book_code} → {bg.get('background')}")
         play_background_video(book_code)  # 배경 비디오 재생 (무한 루프, 오디오 포함)
+        
+        # 배경이 바뀔 때 사운드 이펙트만 재생 (제목 말하기는 마커 감지 시에만 재생)
+        sound_effect_path = "soundeffect/ES_Dream, Harp - Epidemic Sound.wav"
+        
+        def play_sound():
+            # ES_Dream 사운드 이펙트를 음량 20%로 처리한 임시 파일 생성 및 재생
+            if os.path.exists(sound_effect_path):
+                try:
+                    os.makedirs("title_saying", exist_ok=True)
+                    temp_sound = f"title_saying/temp_sound_{book_code}.wav"
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-i", sound_effect_path,
+                         "-af", "volume=0.2",
+                         temp_sound],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=True
+                    )
+                    # 사운드 이펙트 재생
+                    subprocess.run(["afplay", temp_sound],
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+                    os.remove(temp_sound)
+                    print(f"🔊 사운드 효과 재생 (음량 20%): {sound_effect_path}")
+                except Exception as e:
+                    print(f"⚠️ 사운드 효과 재생 실패: {e}")
+        
+        # 비동기로 재생 (블로킹 방지)
+        threading.Thread(target=play_sound, daemon=True).start()
         return
 
     # -------------------------
@@ -862,35 +1163,38 @@ def handle_book_input(book_code: str, index_in_sequence: int):
             play_audio(out2)
             return
 
-        # 장화홍련전의 경우: 박씨(cha2)가 먼저 말하고, 장화(cha1의 언니)가 말하고, 홍련(cha1의 동생)이 말함
-        if CURRENT_CHA1_INFO['book_code'] == "JHHRJ" and book_code == "PSJ":
-            # 박씨가 먼저 말
-            line_psj = generate_action_line(cha2, CURRENT_BG_INFO)
-            out_psj = f"output/{book_code}_{role_key}_init_dialog1.wav"
-            generate_tts(cha2, line_psj, out_psj)
+        # 장화홍련전의 경우: cha2가 먼저 말하고, 장화(cha1의 언니)가 말하고, 홍련(cha1의 동생)이 말함
+        if CURRENT_CHA1_INFO['book_code'] == "JHHRJ":
+            # cha2가 먼저 말
+            line_cha2 = generate_action_line(cha2, CURRENT_BG_INFO)
+            out_cha2 = f"output/{book_code}_{role_key}_init_dialog1.wav"
+            generate_tts(cha2, line_cha2, out_cha2)
+            play_audio(out_cha2)
             
             # 장화가 말
             older, younger = build_sisters_pair()
             line_older = generate_action_line(older, CURRENT_BG_INFO)
             out_older = f"output/JHHRJ_sister_older_init_dialog2.wav"
             generate_tts(older, line_older, out_older)
+            play_audio(out_older)
             
             # 홍련이 말
             line_younger = generate_action_line(younger, CURRENT_BG_INFO)
             out_younger = f"output/JHHRJ_sister_younger_init_dialog3.wav"
             generate_tts(younger, line_younger, out_younger)
-            
-            play_audio(out_psj)
-            play_audio(out_older)
             play_audio(out_younger)
         else:
             # 새로 등장하는 cha2가 먼저 말하고, cha1이 대답하도록 순서 변경
-            line2, line1 = generate_dialogue_lines(cha2, CURRENT_CHA1_INFO, CURRENT_BG_INFO)
+            # 첫 번째 대화 생성 및 재생
+            line2 = generate_first_dialogue_line(cha2, CURRENT_BG_INFO)
             out2 = f"output/{book_code}_{role_key}_init_dialog1.wav"
-            out1 = f"output/{CURRENT_CHA1_INFO['book_code']}_{CURRENT_CHA1_INFO['role_key']}_init_dialog2.wav"
             generate_tts(cha2, line2, out2)
-            generate_tts(CURRENT_CHA1_INFO, line1, out1)
             play_audio(out2)
+            
+            # 두 번째 대화 생성 및 재생
+            line1 = generate_second_dialogue_line(CURRENT_CHA1_INFO, line2, CURRENT_BG_INFO)
+            out1 = f"output/{CURRENT_CHA1_INFO['book_code']}_{CURRENT_CHA1_INFO['role_key']}_init_dialog2.wav"
+            generate_tts(CURRENT_CHA1_INFO, line1, out1)
             play_audio(out1)
         return
 
@@ -915,6 +1219,35 @@ def handle_book_input(book_code: str, index_in_sequence: int):
 
         print(f"[BACKGROUND SWAP] {book_code} → {bg.get('background')}")
         play_background_video(book_code)  # 배경 비디오 교체 (무한 루프, 오디오 포함, 페이드 효과)
+
+        # 배경이 바뀔 때 사운드 이펙트만 재생 (제목 말하기는 마커 감지 시에만 재생)
+        sound_effect_path = "soundeffect/ES_Dream, Harp - Epidemic Sound.wav"
+        
+        def play_sound():
+            # ES_Dream 사운드 이펙트를 음량 20%로 처리한 임시 파일 생성 및 재생
+            if os.path.exists(sound_effect_path):
+                try:
+                    os.makedirs("title_saying", exist_ok=True)
+                    temp_sound = f"title_saying/temp_sound_{book_code}.wav"
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-i", sound_effect_path,
+                         "-af", "volume=0.2",
+                         temp_sound],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=True
+                    )
+                    # 사운드 이펙트 재생
+                    subprocess.run(["afplay", temp_sound],
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+                    os.remove(temp_sound)
+                    print(f"🔊 사운드 효과 재생 (음량 20%): {sound_effect_path}")
+                except Exception as e:
+                    print(f"⚠️ 사운드 효과 재생 실패: {e}")
+        
+        # 비동기로 재생 (블로킹 방지)
+        threading.Thread(target=play_sound, daemon=True).start()
 
         line1 = generate_surprised_line(CURRENT_CHA1_INFO, CURRENT_BG_INFO)
         line2 = generate_surprised_line(CURRENT_CHA2_INFO, CURRENT_BG_INFO)
@@ -945,31 +1278,34 @@ def handle_book_input(book_code: str, index_in_sequence: int):
         if book_code == "JHHRJ" and role_key == "sister_older":
             sister_older, sister_younger = build_sisters_pair()
 
-            # 언니 → 동생 순서로 서로 한 줄씩 대사 생성
-            lineA, lineB = generate_dialogue_lines(sister_older, sister_younger, CURRENT_BG_INFO)
-            reply = generate_action_line(CURRENT_CHA2_INFO, CURRENT_BG_INFO)
-
+            # 언니 → 동생 순서로 서로 한 줄씩 대사 생성 및 재생
+            lineA = generate_first_dialogue_line(sister_older, CURRENT_BG_INFO)
             outA = "output/JHHRJ_sister_older_line.wav"
-            outB = "output/JHHRJ_sister_younger_line.wav"
-            outC = f"output/{CURRENT_CHA2_INFO['book_code']}_{CURRENT_CHA2_INFO['role_key']}_reply_to_sisters.wav"
-
-            # 언니/동생이 서로 다른 voice로 각각 말하게 함
             generate_tts(sister_older, lineA, outA)
-            generate_tts(sister_younger, lineB, outB)
-            generate_tts(CURRENT_CHA2_INFO, reply, outC)
-
             play_audio(outA)
+            
+            lineB = generate_second_dialogue_line(sister_younger, lineA, CURRENT_BG_INFO)
+            outB = "output/JHHRJ_sister_younger_line.wav"
+            generate_tts(sister_younger, lineB, outB)
             play_audio(outB)
+            
+            reply = generate_action_line(CURRENT_CHA2_INFO, CURRENT_BG_INFO)
+            outC = f"output/{CURRENT_CHA2_INFO['book_code']}_{CURRENT_CHA2_INFO['role_key']}_reply_to_sisters.wav"
+            generate_tts(CURRENT_CHA2_INFO, reply, outC)
             play_audio(outC)
             return
 
         # 🔹 그 외 일반 캐릭터: 새 cha1 + 기존 cha2가 한 줄씩 대화
-        line1, line2 = generate_dialogue_lines(cha1, CURRENT_CHA2_INFO, CURRENT_BG_INFO)
+        # 첫 번째 대화 생성 및 재생
+        line1 = generate_first_dialogue_line(cha1, CURRENT_BG_INFO)
         out1 = f"output/{book_code}_{role_key}_swapcha1_dialog1.wav"
-        out2 = f"output/{CURRENT_CHA2_INFO['book_code']}_{CURRENT_CHA2_INFO['role_key']}_swapcha1_dialog2.wav"
         generate_tts(cha1, line1, out1)
-        generate_tts(CURRENT_CHA2_INFO, line2, out2)
         play_audio(out1)
+        
+        # 두 번째 대화 생성 및 재생
+        line2 = generate_second_dialogue_line(CURRENT_CHA2_INFO, line1, CURRENT_BG_INFO)
+        out2 = f"output/{CURRENT_CHA2_INFO['book_code']}_{CURRENT_CHA2_INFO['role_key']}_swapcha1_dialog2.wav"
+        generate_tts(CURRENT_CHA2_INFO, line2, out2)
         play_audio(out2)
         return
 
@@ -1010,12 +1346,16 @@ def handle_book_input(book_code: str, index_in_sequence: int):
             play_audio(out_younger)
         else:
             # cha2가 먼저 말하고, cha1이 대답하도록 순서 변경
-            line2, line1 = generate_dialogue_lines(cha2, CURRENT_CHA1_INFO, CURRENT_BG_INFO)
+            # 첫 번째 대화 생성 및 재생
+            line2 = generate_first_dialogue_line(cha2, CURRENT_BG_INFO)
             out2 = f"output/{book_code}_{role_key}_swapcha2_dialog1.wav"
-            out1 = f"output/{CURRENT_CHA1_INFO['book_code']}_{CURRENT_CHA1_INFO['role_key']}_swapcha2_dialog2.wav"
             generate_tts(cha2, line2, out2)
-            generate_tts(CURRENT_CHA1_INFO, line1, out1)
             play_audio(out2)
+            
+            # 두 번째 대화 생성 및 재생
+            line1 = generate_second_dialogue_line(CURRENT_CHA1_INFO, line2, CURRENT_BG_INFO)
+            out1 = f"output/{CURRENT_CHA1_INFO['book_code']}_{CURRENT_CHA1_INFO['role_key']}_swapcha2_dialog2.wav"
+            generate_tts(CURRENT_CHA1_INFO, line1, out1)
             play_audio(out1)
         return
 
@@ -1050,9 +1390,10 @@ def run_webcam_detection():
     handler_thread = None  # handle_book_input 실행 스레드
     is_processing = False  # 현재 처리 중인지 여부
     
-    # 비디오 윈도우 생성 (전체 화면)
+    # 비디오 윈도우 생성 (팝업창)
     cv2.namedWindow("Background Video", cv2.WINDOW_NORMAL)
-    cv2.setWindowProperty("Background Video", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    # 창 크기 설정 (예: 1280x720)
+    cv2.resizeWindow("Background Video", 1280, 720)
     
     def run_handler_async(book_code, seq_idx):
         """handle_book_input을 별도 스레드에서 실행"""
@@ -1090,6 +1431,26 @@ def run_webcam_detection():
                 book_name_kr = book_info.get("book", book_code)
                 
                 print(f"\n🎯 Marker Detected! ID: {marker_id} → {book_name_kr} ({book_code}) (Num of books: {sequence_index})")
+                
+                # 마커 감지 즉시 제목 말하기 재생 (배경이 바뀔 때만 사운드 이펙트 포함)
+                title_saying_path = f"title_saying/{book_code}_title.wav"
+                
+                def play_title():
+                    # 제목 말하기 재생
+                    if os.path.exists(title_saying_path):
+                        subprocess.run(["afplay", title_saying_path],
+                                      stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.DEVNULL)
+                        print(f"📚 제목 말하기 재생: {title_saying_path}")
+                    
+                    # 제목 말하기가 끝난 후 BGM 재생
+                    if VIDEO_PLAYER.pending_bgm_path:
+                        bgm_path = VIDEO_PLAYER.pending_bgm_path
+                        VIDEO_PLAYER.pending_bgm_path = None
+                        VIDEO_PLAYER._start_bgm(bgm_path)
+                
+                # 비동기로 재생 (블로킹 방지)
+                threading.Thread(target=play_title, daemon=True).start()
                 
                 # 별도 스레드에서 handle_book_input 실행 (비디오가 끊기지 않도록)
                 handler_thread = threading.Thread(
