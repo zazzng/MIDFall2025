@@ -3,6 +3,7 @@ import json
 import subprocess
 import threading
 import time
+import random
 from openai import OpenAI
 from dotenv import load_dotenv
 import cv2
@@ -48,10 +49,19 @@ class VideoPlayer:
         self.is_fading = False  # 페이드 중인지 여부
         self.fade_duration = 0.5  # 페이드 지속 시간 (초)
         self.fade_start_time = None
+        self.overlay_video_cap = None  # 오버레이 비디오 ch1 (캐릭터 움직임)
+        self.overlay_video_path = None  # 오버레이 비디오 ch1 경로
+        self.overlay_video_cap2 = None  # 오버레이 비디오 ch2 (캐릭터 움직임)
+        self.overlay_video_path2 = None  # 오버레이 비디오 ch2 경로
+        self.bg_fps = 30.0  # 배경 비디오 FPS (기본값)
+        self.overlay_fps = 30.0  # 오버레이 비디오 ch1 FPS (기본값)
+        self.overlay_fps2 = 30.0  # 오버레이 비디오 ch2 FPS (기본값)
+        self.last_frame_time = None  # 마지막 프레임 표시 시간
     
     def _play_loop(self):
         """비디오 재생 루프 (별도 스레드에서 실행)"""
         while self.running:
+            loop_start_time = time.time()
             with self.lock:
                 # 페이드 효과 처리
                 if self.is_fading and self.fade_start_time:
@@ -89,13 +99,86 @@ class VideoPlayer:
                         black_frame = frame.copy()
                         black_frame.fill(0)
                         frame = cv2.addWeighted(frame, self.fade_alpha, black_frame, 1.0 - self.fade_alpha, 0)
+                    
+                    # 오버레이 비디오 ch1이 있으면 배경 위에 합성
+                    if self.overlay_video_cap is not None and self.overlay_video_cap.isOpened():
+                        overlay_ret, overlay_frame = self.overlay_video_cap.read()
+                        if not overlay_ret:
+                            # 오버레이 비디오 끝나면 처음으로 돌아가기
+                            self.overlay_video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                            overlay_ret, overlay_frame = self.overlay_video_cap.read()
+                        
+                        if overlay_ret:
+                            # 오버레이 프레임 크기를 배경 프레임 크기에 맞춤
+                            if overlay_frame.shape[:2] != frame.shape[:2]:
+                                overlay_frame = cv2.resize(overlay_frame, (frame.shape[1], frame.shape[0]))
+                            
+                            # 알파 채널이 있으면 알파 블렌딩, 없으면 일반 오버레이
+                            if overlay_frame.shape[2] == 4:
+                                # RGBA -> RGB 변환 및 알파 블렌딩
+                                overlay_rgb = overlay_frame[:, :, :3]
+                                overlay_alpha = overlay_frame[:, :, 3:4] / 255.0
+                                frame = (frame * (1 - overlay_alpha) + overlay_rgb * overlay_alpha).astype(frame.dtype)
+                            else:
+                                # 알파 채널이 없으면 일반 오버레이 (투명도 가정)
+                                # 배경 위에 오버레이 합성
+                                mask = cv2.cvtColor(overlay_frame, cv2.COLOR_BGR2GRAY)
+                                mask = cv2.threshold(mask, 1, 255, cv2.THRESH_BINARY)[1]
+                                mask = mask.astype(float) / 255.0
+                                mask = cv2.merge([mask, mask, mask])
+                                frame = (frame * (1 - mask) + overlay_frame * mask).astype(frame.dtype)
+                    
+                    # 오버레이 비디오 ch2가 있으면 배경 위에 합성 (ch1 위에)
+                    if self.overlay_video_cap2 is not None and self.overlay_video_cap2.isOpened():
+                        overlay_ret2, overlay_frame2 = self.overlay_video_cap2.read()
+                        if not overlay_ret2:
+                            # 오버레이 비디오 끝나면 처음으로 돌아가기
+                            self.overlay_video_cap2.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                            overlay_ret2, overlay_frame2 = self.overlay_video_cap2.read()
+                        
+                        if overlay_ret2:
+                            # 오버레이 프레임 크기를 배경 프레임 크기에 맞춤
+                            if overlay_frame2.shape[:2] != frame.shape[:2]:
+                                overlay_frame2 = cv2.resize(overlay_frame2, (frame.shape[1], frame.shape[0]))
+                            
+                            # 알파 채널이 있으면 알파 블렌딩, 없으면 일반 오버레이
+                            if overlay_frame2.shape[2] == 4:
+                                # RGBA -> RGB 변환 및 알파 블렌딩
+                                overlay_rgb2 = overlay_frame2[:, :, :3]
+                                overlay_alpha2 = overlay_frame2[:, :, 3:4] / 255.0
+                                frame = (frame * (1 - overlay_alpha2) + overlay_rgb2 * overlay_alpha2).astype(frame.dtype)
+                            else:
+                                # 알파 채널이 없으면 일반 오버레이 (투명도 가정)
+                                # 배경 위에 오버레이 합성
+                                mask2 = cv2.cvtColor(overlay_frame2, cv2.COLOR_BGR2GRAY)
+                                mask2 = cv2.threshold(mask2, 1, 255, cv2.THRESH_BINARY)[1]
+                                mask2 = mask2.astype(float) / 255.0
+                                mask2 = cv2.merge([mask2, mask2, mask2])
+                                frame = (frame * (1 - mask2) + overlay_frame2 * mask2).astype(frame.dtype)
+                    
                     self.frame = frame
             
-            # 프레임 레이트 맞추기 (약 30fps)
-            time.sleep(0.033)
+            # 실제 비디오 FPS에 맞춰 프레임 간격 조정
+            # 배경 비디오의 FPS를 기준으로 사용 (오버레이가 있으면 더 높은 FPS 사용)
+            target_fps = max(self.bg_fps, 
+                           self.overlay_fps if self.overlay_video_cap else 0,
+                           self.overlay_fps2 if self.overlay_video_cap2 else 0)
+            if target_fps <= 0:
+                target_fps = 30.0  # 기본값
+            
+            frame_interval = 1.0 / target_fps
+            
+            # 프레임 처리 시간 고려하여 정확한 타이밍으로 재생
+            elapsed = time.time() - loop_start_time
+            sleep_time = max(0, frame_interval - elapsed)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
     
     def _switch_video_internal(self, video_path: str):
         """내부 비디오 전환 (페이드 중에 호출)"""
+        # 배경이 바뀔 때 이전 BGM 즉시 종료
+        self._stop_bgm_immediately()
+        
         # 기존 비디오 해제
         if self.video_cap:
             self.video_cap.release()
@@ -106,8 +189,15 @@ class VideoPlayer:
         if not self.video_cap.isOpened():
             print(f"❌ 비디오를 열 수 없음: {video_path}")
             self.video_cap = None
+            self.bg_fps = 30.0  # 기본값
         else:
-            print(f"🎬 비디오 전환: {video_path}")
+            # 실제 비디오 FPS 읽기
+            fps = self.video_cap.get(cv2.CAP_PROP_FPS)
+            if fps > 0:
+                self.bg_fps = fps
+            else:
+                self.bg_fps = 30.0  # 기본값
+            print(f"🎬 비디오 전환: {video_path} (FPS: {self.bg_fps:.2f})")
             
             # 비디오 파일명에서 책 코드 추출하여 BGM 경로 저장 (제목 말하기 후 재생)
             video_filename = os.path.basename(video_path)
@@ -131,57 +221,56 @@ class VideoPlayer:
             else:
                 print(f"⚠️ 비디오 파일명에서 책 코드를 찾을 수 없음: {video_filename}")
     
-    def _start_bgm(self, bgm_path: str):
-        """BGM을 무한 루프로 재생 (페이드인 효과 포함)"""
-        # 기존 BGM을 페이드아웃하면서 종료
+    def _stop_bgm_immediately(self):
+        """기존 BGM을 즉시 종료"""
         old_bgm_process = self.bgm_process
         old_bgm_proc_ref = self.bgm_proc_ref
         if old_bgm_process or old_bgm_proc_ref:
-            def fade_out_old_bgm():
-                try:
-                    # 페이드아웃 시간 동안 대기 (0.5초)
-                    time.sleep(0.5)
-                    # 실제 프로세스 종료
-                    if old_bgm_proc_ref:
-                        if isinstance(old_bgm_proc_ref, dict):
-                            # 딕셔너리인 경우 (macOS bgm_control)
-                            old_bgm_proc_ref["running"] = False
-                            if old_bgm_proc_ref.get("current_proc"):
-                                try:
-                                    old_bgm_proc_ref["current_proc"].terminate()
-                                    old_bgm_proc_ref["current_proc"].wait(timeout=0.5)
-                                except:
-                                    try:
-                                        old_bgm_proc_ref["current_proc"].kill()
-                                    except:
-                                        pass
-                        elif isinstance(old_bgm_proc_ref, list):
-                            # 리스트인 경우 [proc, afplay_proc]
-                            for p in old_bgm_proc_ref:
-                                if p and hasattr(p, "terminate"):
-                                    try:
-                                        p.terminate()
-                                        p.wait(timeout=0.5)
-                                    except:
-                                        try:
-                                            p.kill()
-                                        except:
-                                            pass
-                        elif hasattr(old_bgm_proc_ref, "terminate"):
+            try:
+                if old_bgm_proc_ref:
+                    if isinstance(old_bgm_proc_ref, dict):
+                        # 딕셔너리인 경우 (macOS bgm_control)
+                        old_bgm_proc_ref["running"] = False
+                        if old_bgm_proc_ref.get("current_proc"):
                             try:
-                                old_bgm_proc_ref.terminate()
-                                old_bgm_proc_ref.wait(timeout=0.5)
+                                old_bgm_proc_ref["current_proc"].terminate()
+                                old_bgm_proc_ref["current_proc"].wait(timeout=0.1)
                             except:
                                 try:
-                                    old_bgm_proc_ref.kill()
+                                    old_bgm_proc_ref["current_proc"].kill()
                                 except:
                                     pass
-                except Exception as e:
-                    print(f"⚠️ BGM 페이드아웃 오류: {e}")
+                    elif isinstance(old_bgm_proc_ref, list):
+                        # 리스트인 경우 [proc, afplay_proc]
+                        for p in old_bgm_proc_ref:
+                            if p and hasattr(p, "terminate"):
+                                try:
+                                    p.terminate()
+                                    p.wait(timeout=0.1)
+                                except:
+                                    try:
+                                        p.kill()
+                                    except:
+                                        pass
+                    elif hasattr(old_bgm_proc_ref, "terminate"):
+                        try:
+                            old_bgm_proc_ref.terminate()
+                            old_bgm_proc_ref.wait(timeout=0.1)
+                        except:
+                            try:
+                                old_bgm_proc_ref.kill()
+                            except:
+                                pass
+            except Exception as e:
+                print(f"⚠️ BGM 종료 오류: {e}")
             
-            threading.Thread(target=fade_out_old_bgm, daemon=True).start()
             self.bgm_process = None
             self.bgm_proc_ref = None
+    
+    def _start_bgm(self, bgm_path: str):
+        """BGM을 무한 루프로 재생 (페이드인 효과 포함)"""
+        # 기존 BGM을 즉시 종료
+        self._stop_bgm_immediately()
         
         # BGM을 무한 루프로 재생 (페이드인 효과 포함)
         import platform
@@ -202,12 +291,24 @@ class VideoPlayer:
                         temp_dir = tempfile.gettempdir()
                         temp_bgm = os.path.join(temp_dir, f"bgm_fade_{os.getpid()}.wav")
                         
-                        # 첫 루프에만 페이드인 적용
+                        # 첫 루프에만 페이드인 적용 + 음량 50%
                         subprocess.run(
                             ["ffmpeg", "-y", "-i", bgm_path,
-                             "-af", f"afade=t=in:st=0:d={fade_duration}",
+                             "-af", f"afade=t=in:st=0:d={fade_duration},volume=0.5",
                              "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
                              temp_bgm],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=True
+                        )
+                        
+                        # 원본 파일도 음량 50%로 조정한 임시 파일 생성
+                        temp_bgm_loop = os.path.join(temp_dir, f"bgm_loop_{os.getpid()}.wav")
+                        subprocess.run(
+                            ["ffmpeg", "-y", "-i", bgm_path,
+                             "-af", "volume=0.5",
+                             "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+                             temp_bgm_loop],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                             check=True
@@ -226,9 +327,9 @@ class VideoPlayer:
                                 proc.wait()
                                 first_play = False
                             else:
-                                # 이후는 원본 파일 무한 루프
+                                # 이후는 음량 조정된 파일 무한 루프
                                 proc = subprocess.Popen(
-                                    ["afplay", bgm_path],
+                                    ["afplay", temp_bgm_loop],
                                     stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL
                                 )
@@ -242,6 +343,7 @@ class VideoPlayer:
                         # 임시 파일 삭제
                         try:
                             os.remove(temp_bgm)
+                            os.remove(temp_bgm_loop)
                         except:
                             pass
                     except Exception as e:
@@ -261,7 +363,7 @@ class VideoPlayer:
                 # Linux: ffplay 사용
                 proc = subprocess.Popen(
                     ["ffmpeg", "-stream_loop", "-1", "-i", bgm_path,
-                     "-af", "afade=t=in:st=0:d=0.5",
+                     "-af", "afade=t=in:st=0:d=0.5,volume=0.5",
                      "-f", "wav", "-"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL
@@ -360,6 +462,73 @@ class VideoPlayer:
             self.thread = threading.Thread(target=self._play_loop, daemon=True)
             self.thread.start()
     
+    def set_overlay_video(self, overlay_path: str):
+        """오버레이 비디오 ch1 설정 (배경 위에 표시될 캐릭터 움직임)"""
+        with self.lock:
+            # 기존 오버레이 비디오 해제
+            if self.overlay_video_cap:
+                self.overlay_video_cap.release()
+            
+            if overlay_path and os.path.exists(overlay_path):
+                self.overlay_video_path = overlay_path
+                self.overlay_video_cap = cv2.VideoCapture(overlay_path)
+                if not self.overlay_video_cap.isOpened():
+                    print(f"❌ 오버레이 비디오를 열 수 없음: {overlay_path}")
+                    self.overlay_video_cap = None
+                    self.overlay_video_path = None
+                    self.overlay_fps = 30.0  # 기본값
+                else:
+                    # 실제 비디오 FPS 읽기
+                    fps = self.overlay_video_cap.get(cv2.CAP_PROP_FPS)
+                    if fps > 0:
+                        self.overlay_fps = fps
+                    else:
+                        self.overlay_fps = 30.0  # 기본값
+                    print(f"🎬 오버레이 비디오 ch1 설정: {overlay_path} (FPS: {self.overlay_fps:.2f})")
+            else:
+                self.overlay_video_cap = None
+                self.overlay_video_path = None
+    
+    def set_overlay_video2(self, overlay_path: str):
+        """오버레이 비디오 ch2 설정 (배경 위에 표시될 캐릭터 움직임)"""
+        with self.lock:
+            # 기존 오버레이 비디오 ch2 해제
+            if self.overlay_video_cap2:
+                self.overlay_video_cap2.release()
+            
+            if overlay_path and os.path.exists(overlay_path):
+                self.overlay_video_path2 = overlay_path
+                self.overlay_video_cap2 = cv2.VideoCapture(overlay_path)
+                if not self.overlay_video_cap2.isOpened():
+                    print(f"❌ 오버레이 비디오 ch2를 열 수 없음: {overlay_path}")
+                    self.overlay_video_cap2 = None
+                    self.overlay_video_path2 = None
+                    self.overlay_fps2 = 30.0  # 기본값
+                else:
+                    # 실제 비디오 FPS 읽기
+                    fps = self.overlay_video_cap2.get(cv2.CAP_PROP_FPS)
+                    if fps > 0:
+                        self.overlay_fps2 = fps
+                    else:
+                        self.overlay_fps2 = 30.0  # 기본값
+                    print(f"🎬 오버레이 비디오 ch2 설정: {overlay_path} (FPS: {self.overlay_fps2:.2f})")
+            else:
+                self.overlay_video_cap2 = None
+                self.overlay_video_path2 = None
+    
+    def clear_overlay_video(self):
+        """오버레이 비디오 모두 제거"""
+        with self.lock:
+            if self.overlay_video_cap:
+                self.overlay_video_cap.release()
+                self.overlay_video_cap = None
+                self.overlay_video_path = None
+            if self.overlay_video_cap2:
+                self.overlay_video_cap2.release()
+                self.overlay_video_cap2 = None
+                self.overlay_video_path2 = None
+                print("🎬 오버레이 비디오 모두 제거")
+    
     def stop(self):
         """플레이어 중지"""
         self.running = False
@@ -369,6 +538,12 @@ class VideoPlayer:
             if self.video_cap:
                 self.video_cap.release()
                 self.video_cap = None
+            if self.overlay_video_cap:
+                self.overlay_video_cap.release()
+                self.overlay_video_cap = None
+            if self.overlay_video_cap2:
+                self.overlay_video_cap2.release()
+                self.overlay_video_cap2 = None
             self.frame = None
         # 오디오 프로세스/스레드 종료
         if self.audio_process:
@@ -461,6 +636,19 @@ BOOK_TO_VIDEO = {
     "JHHRJ": "6_JHHRJ_matchedSize.mov",
     "SCJ": "7_SCJ_matchedSize.mov",
 }
+# 오버레이 비디오 파일명 매핑 (inter_video 폴더의 파일명 형식)
+BOOK_TO_OVERLAY_CODE = {
+    "BJBJ": "BJBJ",
+    "PSJ": "BSJ",  # 박씨전 -> BSJ
+    "DGJ": "DCJ",  # 덕캐비전 -> DCJ
+    "HBJ": "HBJ",
+    "JWCJ": "JWCJ",
+    "KWJ": "KWJ",
+    "OGJJ": "OGJJ",
+    "JHHRJ": "JHHRJ",
+    "SCJ": "SCJ",
+}
+
 BOOK_TO_BGM = {
     "BJBJ": "10_BJBJ_audioExtracted.wav",
     "PSJ": "11_BSJ_audioExtracted.wav",  # 파일명이 BSJ로 되어 있음
@@ -1013,8 +1201,124 @@ def generate_tts(character: dict, text: str, output_path: str):
 
     audio_bytes = response.read()
 
-    with open(output_path, "wb") as f:
+    # 임시 파일에 원본 오디오 저장
+    import tempfile
+    temp_dir = tempfile.gettempdir()
+    temp_input = os.path.join(temp_dir, f"tts_temp_{os.getpid()}_{id(character)}.wav")
+    with open(temp_input, "wb") as f:
         f.write(audio_bytes)
+    
+    # 특수 캐릭터 오디오 효과 적용
+    book_code = character.get("book_code", "")
+    role_key = character.get("role_key", "")
+    
+    if (book_code == "JHHRJ" and role_key == "ghost") or (book_code == "KWJ" and role_key == "monster"):
+        # reverb 효과 적용 (aecho 필터 사용)
+        # ghost의 경우: 더 서글프고 울먹거리는 효과를 위해 tremolo와 pitch 조정도 추가
+        if book_code == "JHHRJ" and role_key == "ghost":
+            # ghost: 구슬프고 우울하고 한이 서린 처녀귀신 목소리
+            # 효과: 깊은 reverb + 강한 tremolo (울먹거림) + 낮은 pitch (어둡고 우울) + 느린 속도 + 고주파 필터링 + delay + equalizer
+            audio_filter = (
+                "asetrate=44100*0.92,aresample=44100,"
+                "atempo=0.95,"
+                "lowpass=f=3000,"
+                "aecho=1.0:0.9:120:0.5,"
+                "adelay=50|50,"
+                "tremolo=f=3.0:d=0.4,"
+                "equalizer=f=200:width_type=h:width=300:g=2,"
+                "equalizer=f=5000:width_type=h:width=2000:g=-3"
+            )
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", temp_input,
+                 "-af", audio_filter,
+                 output_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True
+            )
+        else:
+            # monster: reverb만 적용
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", temp_input,
+                 "-af", "aecho=0.8:0.88:60:0.4",
+                 output_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True
+            )
+        # 임시 파일 삭제
+        try:
+            os.remove(temp_input)
+        except:
+            pass
+    elif book_code == "SCJ" and role_key == "simcheong":
+        # 심청: 어리고 명랑하고 결연에 가득 찬 목소리
+        # 효과: 높은 pitch (어리고 밝게) + 빠른 속도 (명랑함) + 고주파 강조 (맑고 밝게) + vibrato (생동감) + 저주파 억제 (가볍고 밝게)
+        # 오디오 필터 체인을 하나의 문자열로 합침
+        audio_filter = (
+            "asetrate=44100*1.12,aresample=44100,"  # pitch 올림 (더 어리고 밝게)
+            "atempo=1.08,"  # 속도 빠르게 (명랑하고 활기차게)
+            "equalizer=f=3000:width_type=h:width=2000:g=3,"  # 고주파 강조 (맑고 밝게)
+            "equalizer=f=5000:width_type=h:width=1500:g=2,"  # 더 높은 고주파 강조 (명랑함)
+            "equalizer=f=200:width_type=h:width=300:g=-2,"  # 저주파 억제 (가볍고 밝게)
+            "vibrato=f=5.5:d=0.15,"  # 약간의 vibrato (생동감과 결연함)
+            "highpass=f=100"  # 매우 낮은 주파수 제거 (더 맑게)
+        )
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", temp_input,
+             "-af", audio_filter,
+             output_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True
+        )
+        # 임시 파일 삭제
+        try:
+            os.remove(temp_input)
+        except:
+            pass
+    elif book_code == "DGJ":
+        if role_key == "fox":
+            # 여우: 교활하고 가는 목소리, 간신배 느낌
+            # pitch를 약간 올려서 더 가늘게, tremolo를 약간 추가해서 교활한 느낌
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", temp_input,
+                 "-af", "asetrate=44100*1.15,aresample=44100,tremolo=f=3.0:d=0.2",
+                 output_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True
+            )
+        elif role_key == "toad":
+            # 두꺼비: 현명하고 총명하고 뭉툭하고 묵직한 목소리
+            # pitch를 약간 낮춰서 더 묵직하게, bass boost로 더 깊고 뭉툭한 느낌
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", temp_input,
+                 "-af", "asetrate=44100*0.9,aresample=44100,equalizer=f=100:width_type=h:width=200:g=3",
+                 output_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True
+            )
+        else:
+            # 다른 DGJ 캐릭터는 원본 그대로
+            with open(output_path, "wb") as f:
+                f.write(audio_bytes)
+        # 임시 파일 삭제
+        try:
+            os.remove(temp_input)
+        except:
+            pass
+    else:
+        # 일반 캐릭터는 원본 그대로 저장
+        with open(output_path, "wb") as f:
+            f.write(audio_bytes)
+        # 임시 파일 삭제
+        try:
+            os.remove(temp_input)
+        except:
+            pass
+    
     print(f"✅ Saved: {output_path}")
 
     return output_path
@@ -1110,6 +1414,17 @@ def handle_book_input(book_code: str, index_in_sequence: int):
 
         cha1 = build_character(book_code, role_key)
         CURRENT_CHA1_INFO = cha1
+        
+        # 첫 번째 책이 심청전(SCJ)이고 두 번째 책이 감지되면 오버레이 비디오 설정
+        if CURRENT_BG_BOOK_CODE == "SCJ":
+            # inter_video/inter_bgSCJ/bgSCJ_ch1_{overlay_code}.mov 파일 찾기
+            overlay_code = BOOK_TO_OVERLAY_CODE.get(book_code, book_code)
+            overlay_path = f"inter_video/inter_bgSCJ/bgSCJ_ch1_{overlay_code}.mov"
+            if os.path.exists(overlay_path):
+                VIDEO_PLAYER.set_overlay_video(overlay_path)
+                print(f"🎬 오버레이 비디오 설정: {overlay_path}")
+            else:
+                print(f"⚠️ 오버레이 비디오를 찾을 수 없음: {overlay_path}")
 
         # 장화홍련전의 경우 자매 둘 다 말하도록
         if book_code == "JHHRJ":
@@ -1124,12 +1439,23 @@ def handle_book_input(book_code: str, index_in_sequence: int):
                 line1 = "홍련아, 여기가 어디지?"
                 line2 = "언니, 나도 모르겠어."
             
-            out1 = f"output/JHHRJ_sister_older_init_cha1.wav"
-            out2 = f"output/JHHRJ_sister_younger_init_cha1.wav"
-            generate_tts(older, line1, out1)
-            generate_tts(younger, line2, out2)
-            play_audio(out1)
-            play_audio(out2)
+            # 랜덤으로 순서 결정
+            if random.random() < 0.5:
+                # 장화 먼저
+                out1 = f"output/JHHRJ_sister_older_init_cha1.wav"
+                out2 = f"output/JHHRJ_sister_younger_init_cha1.wav"
+                generate_tts(older, line1, out1)
+                generate_tts(younger, line2, out2)
+                play_audio(out1)
+                play_audio(out2)
+            else:
+                # 홍련 먼저
+                out1 = f"output/JHHRJ_sister_younger_init_cha1.wav"
+                out2 = f"output/JHHRJ_sister_older_init_cha1.wav"
+                generate_tts(younger, line2, out1)
+                generate_tts(older, line1, out2)
+                play_audio(out1)
+                play_audio(out2)
         else:
             line = generate_action_line(cha1, CURRENT_BG_INFO)
             if not line:
@@ -1154,6 +1480,17 @@ def handle_book_input(book_code: str, index_in_sequence: int):
 
         cha2 = build_character(book_code, role_key)
         CURRENT_CHA2_INFO = cha2
+        
+        # 첫 번째 책이 심청전(SCJ)이고 세 번째 책이 감지되면 ch2 오버레이 비디오 설정
+        if CURRENT_BG_BOOK_CODE == "SCJ":
+            # inter_video/inter_bgSCJ/bgSCJ_ch2_{overlay_code}.mov 파일 찾기
+            overlay_code = BOOK_TO_OVERLAY_CODE.get(book_code, book_code)
+            overlay_path2 = f"inter_video/inter_bgSCJ/bgSCJ_ch2_{overlay_code}.mov"
+            if os.path.exists(overlay_path2):
+                VIDEO_PLAYER.set_overlay_video2(overlay_path2)
+                print(f"🎬 오버레이 비디오 ch2 설정: {overlay_path2}")
+            else:
+                print(f"⚠️ 오버레이 비디오 ch2를 찾을 수 없음: {overlay_path2}")
 
         if CURRENT_CHA1_INFO is None:
             print("⚠ cha1이 아직 설정되지 않아 cha2만 한 줄 대사")
@@ -1163,26 +1500,39 @@ def handle_book_input(book_code: str, index_in_sequence: int):
             play_audio(out2)
             return
 
-        # 장화홍련전의 경우: cha2가 먼저 말하고, 장화(cha1의 언니)가 말하고, 홍련(cha1의 동생)이 말함
+        # 장화홍련전의 경우: 자매가 랜덤 순서로 말함
         if CURRENT_CHA1_INFO['book_code'] == "JHHRJ":
-            # cha2가 먼저 말
-            line_cha2 = generate_action_line(cha2, CURRENT_BG_INFO)
-            out_cha2 = f"output/{book_code}_{role_key}_init_dialog1.wav"
+            older, younger = build_sisters_pair()
+            
+            # 랜덤으로 순서 결정
+            if random.random() < 0.5:
+                # 장화 먼저
+                line_older = generate_action_line(older, CURRENT_BG_INFO)
+                out_older = f"output/JHHRJ_sister_older_init_dialog1.wav"
+                generate_tts(older, line_older, out_older)
+                play_audio(out_older)
+                
+                line_younger = generate_second_dialogue_line(younger, line_older, CURRENT_BG_INFO)
+                out_younger = f"output/JHHRJ_sister_younger_init_dialog2.wav"
+                generate_tts(younger, line_younger, out_younger)
+                play_audio(out_younger)
+            else:
+                # 홍련 먼저
+                line_younger = generate_action_line(younger, CURRENT_BG_INFO)
+                out_younger = f"output/JHHRJ_sister_younger_init_dialog1.wav"
+                generate_tts(younger, line_younger, out_younger)
+                play_audio(out_younger)
+                
+                line_older = generate_second_dialogue_line(older, line_younger, CURRENT_BG_INFO)
+                out_older = f"output/JHHRJ_sister_older_init_dialog2.wav"
+                generate_tts(older, line_older, out_older)
+                play_audio(out_older)
+            
+            # cha2가 자매의 대화에 반응
+            line_cha2 = generate_second_dialogue_line(cha2, line_younger if random.random() < 0.5 else line_older, CURRENT_BG_INFO)
+            out_cha2 = f"output/{book_code}_{role_key}_init_dialog3.wav"
             generate_tts(cha2, line_cha2, out_cha2)
             play_audio(out_cha2)
-            
-            # 장화가 말
-            older, younger = build_sisters_pair()
-            line_older = generate_action_line(older, CURRENT_BG_INFO)
-            out_older = f"output/JHHRJ_sister_older_init_dialog2.wav"
-            generate_tts(older, line_older, out_older)
-            play_audio(out_older)
-            
-            # 홍련이 말
-            line_younger = generate_action_line(younger, CURRENT_BG_INFO)
-            out_younger = f"output/JHHRJ_sister_younger_init_dialog3.wav"
-            generate_tts(younger, line_younger, out_younger)
-            play_audio(out_younger)
         else:
             # 새로 등장하는 cha2가 먼저 말하고, cha1이 대답하도록 순서 변경
             # 첫 번째 대화 생성 및 재생
@@ -1218,6 +1568,7 @@ def handle_book_input(book_code: str, index_in_sequence: int):
         CURRENT_BG_INFO = bg
 
         print(f"[BACKGROUND SWAP] {book_code} → {bg.get('background')}")
+        # 배경만 교체하고 오버레이 비디오(ch1, ch2)는 그대로 유지
         play_background_video(book_code)  # 배경 비디오 교체 (무한 루프, 오디오 포함, 페이드 효과)
 
         # 배경이 바뀔 때 사운드 이펙트만 재생 (제목 말하기는 마커 감지 시에만 재생)
@@ -1273,23 +1624,37 @@ def handle_book_input(book_code: str, index_in_sequence: int):
         cha1 = build_character(book_code, role_key)
         CURRENT_CHA1_INFO = cha1
 
-        # 🔸 장화홍련 자매인 경우: 언니 + 동생이 각각 한 줄씩 말하고,
+        # 🔸 장화홍련 자매인 경우: 랜덤 순서로 각각 한 줄씩 말하고,
         #    기존 cha2(예: 토끼, 귀신 등)가 한 줄 더 대답.
         if book_code == "JHHRJ" and role_key == "sister_older":
             sister_older, sister_younger = build_sisters_pair()
 
-            # 언니 → 동생 순서로 서로 한 줄씩 대사 생성 및 재생
-            lineA = generate_first_dialogue_line(sister_older, CURRENT_BG_INFO)
-            outA = "output/JHHRJ_sister_older_line.wav"
-            generate_tts(sister_older, lineA, outA)
-            play_audio(outA)
+            # 랜덤으로 순서 결정
+            if random.random() < 0.5:
+                # 언니 → 동생 순서
+                lineA = generate_first_dialogue_line(sister_older, CURRENT_BG_INFO)
+                outA = "output/JHHRJ_sister_older_line.wav"
+                generate_tts(sister_older, lineA, outA)
+                play_audio(outA)
+                
+                lineB = generate_second_dialogue_line(sister_younger, lineA, CURRENT_BG_INFO)
+                outB = "output/JHHRJ_sister_younger_line.wav"
+                generate_tts(sister_younger, lineB, outB)
+                play_audio(outB)
+            else:
+                # 동생 → 언니 순서
+                lineB = generate_first_dialogue_line(sister_younger, CURRENT_BG_INFO)
+                outB = "output/JHHRJ_sister_younger_line.wav"
+                generate_tts(sister_younger, lineB, outB)
+                play_audio(outB)
+                
+                lineA = generate_second_dialogue_line(sister_older, lineB, CURRENT_BG_INFO)
+                outA = "output/JHHRJ_sister_older_line.wav"
+                generate_tts(sister_older, lineA, outA)
+                play_audio(outA)
             
-            lineB = generate_second_dialogue_line(sister_younger, lineA, CURRENT_BG_INFO)
-            outB = "output/JHHRJ_sister_younger_line.wav"
-            generate_tts(sister_younger, lineB, outB)
-            play_audio(outB)
-            
-            reply = generate_action_line(CURRENT_CHA2_INFO, CURRENT_BG_INFO)
+            # cha2가 자매의 대화에 반응
+            reply = generate_second_dialogue_line(CURRENT_CHA2_INFO, lineA if random.random() < 0.5 else lineB, CURRENT_BG_INFO)
             outC = f"output/{CURRENT_CHA2_INFO['book_code']}_{CURRENT_CHA2_INFO['role_key']}_reply_to_sisters.wav"
             generate_tts(CURRENT_CHA2_INFO, reply, outC)
             play_audio(outC)
@@ -1322,28 +1687,39 @@ def handle_book_input(book_code: str, index_in_sequence: int):
         cha2 = build_character(book_code, role_key)
         CURRENT_CHA2_INFO = cha2
 
-        # cha1이 장화홍련인 경우: cha2가 먼저 말하고, older가 말하고, younger가 말함
+        # cha1이 장화홍련인 경우: 자매가 랜덤 순서로 말함
         if CURRENT_CHA1_INFO['book_code'] == "JHHRJ":
             older, younger = build_sisters_pair()
             
-            # cha2가 먼저 말
-            line_cha2 = generate_action_line(cha2, CURRENT_BG_INFO)
-            out_cha2 = f"output/{book_code}_{role_key}_swapcha2_dialog1.wav"
+            # 랜덤으로 순서 결정
+            if random.random() < 0.5:
+                # 장화 먼저
+                line_older = generate_action_line(older, CURRENT_BG_INFO)
+                out_older = f"output/JHHRJ_sister_older_swapcha2_dialog1.wav"
+                generate_tts(older, line_older, out_older)
+                play_audio(out_older)
+                
+                line_younger = generate_second_dialogue_line(younger, line_older, CURRENT_BG_INFO)
+                out_younger = f"output/JHHRJ_sister_younger_swapcha2_dialog2.wav"
+                generate_tts(younger, line_younger, out_younger)
+                play_audio(out_younger)
+            else:
+                # 홍련 먼저
+                line_younger = generate_action_line(younger, CURRENT_BG_INFO)
+                out_younger = f"output/JHHRJ_sister_younger_swapcha2_dialog1.wav"
+                generate_tts(younger, line_younger, out_younger)
+                play_audio(out_younger)
+                
+                line_older = generate_second_dialogue_line(older, line_younger, CURRENT_BG_INFO)
+                out_older = f"output/JHHRJ_sister_older_swapcha2_dialog2.wav"
+                generate_tts(older, line_older, out_older)
+                play_audio(out_older)
+            
+            # cha2가 자매의 대화에 반응
+            line_cha2 = generate_second_dialogue_line(cha2, line_younger if random.random() < 0.5 else line_older, CURRENT_BG_INFO)
+            out_cha2 = f"output/{book_code}_{role_key}_swapcha2_dialog3.wav"
             generate_tts(cha2, line_cha2, out_cha2)
-            
-            # older가 말
-            line_older = generate_action_line(older, CURRENT_BG_INFO)
-            out_older = f"output/JHHRJ_sister_older_swapcha2_dialog2.wav"
-            generate_tts(older, line_older, out_older)
-            
-            # younger가 말
-            line_younger = generate_action_line(younger, CURRENT_BG_INFO)
-            out_younger = f"output/JHHRJ_sister_younger_swapcha2_dialog3.wav"
-            generate_tts(younger, line_younger, out_younger)
-            
             play_audio(out_cha2)
-            play_audio(out_older)
-            play_audio(out_younger)
         else:
             # cha2가 먼저 말하고, cha1이 대답하도록 순서 변경
             # 첫 번째 대화 생성 및 재생
@@ -1436,12 +1812,31 @@ def run_webcam_detection():
                 title_saying_path = f"title_saying/{book_code}_title.wav"
                 
                 def play_title():
-                    # 제목 말하기 재생
+                    # 제목 말하기 재생 (음량 150%)
                     if os.path.exists(title_saying_path):
-                        subprocess.run(["afplay", title_saying_path],
+                        # 음량 150%로 조정한 임시 파일 생성
+                        import tempfile
+                        temp_dir = tempfile.gettempdir()
+                        temp_title = os.path.join(temp_dir, f"title_{os.getpid()}_{id(title_saying_path)}.wav")
+                        subprocess.run(
+                            ["ffmpeg", "-y", "-i", title_saying_path,
+                             "-af", "volume=1.5",
+                             "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+                             temp_title],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=True
+                        )
+                        # 조정된 파일 재생
+                        subprocess.run(["afplay", temp_title],
                                       stdout=subprocess.DEVNULL,
                                       stderr=subprocess.DEVNULL)
-                        print(f"📚 제목 말하기 재생: {title_saying_path}")
+                        # 임시 파일 삭제
+                        try:
+                            os.remove(temp_title)
+                        except:
+                            pass
+                        print(f"📚 제목 말하기 재생 (음량 150%): {title_saying_path}")
                     
                     # 제목 말하기가 끝난 후 BGM 재생
                     if VIDEO_PLAYER.pending_bgm_path:
