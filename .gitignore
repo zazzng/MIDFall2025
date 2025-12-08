@@ -52,3 +52,4 @@ markers/
 .DS_Store
 Thumbs.db
 
+test.py.backup
