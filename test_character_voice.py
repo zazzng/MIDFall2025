@@ -9,8 +9,14 @@ import json
 import subprocess
 import tempfile
 import re
+import sys
+import time
 from openai import OpenAI
 from dotenv import load_dotenv
+
+# tts.py에서 공통 함수 import
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from tts import apply_audio_effects
 
 # 환경 변수 로드
 load_dotenv()
@@ -23,8 +29,8 @@ ALLOWED_VOICES = {
 }
 
 def load_characters():
-    """characters.json 로드"""
-    with open("characters.json", "r", encoding="utf-8") as f:
+    """characters_tone.json 로드"""
+    with open("characters_tone.json", "r", encoding="utf-8") as f:
         return json.load(f)
 
 def list_all_characters(characters):
@@ -85,117 +91,62 @@ def generate_test_tts(character, book_code, role_key, text="안녕하세요"):
     with open(temp_input, "wb") as f:
         f.write(audio_bytes)
     
-    # 특수 캐릭터 오디오 효과 적용 (tts.py와 동일한 로직)
-    output_path = temp_input
+    # 특수 캐릭터 오디오 효과 적용 (tts.py의 공통 함수 사용)
+    output_path = os.path.join(temp_dir, f"test_voice_processed_{os.getpid()}.wav")
     
-    if (book_code == "JHHRJ" and role_key == "ghost") or (book_code == "KWJ" and role_key == "monster"):
-        # reverb 효과 적용 (aecho 필터 사용)
-        # ghost의 경우: 더 서글프고 울먹거리는 효과를 위해 tremolo와 pitch 조정도 추가
-        if book_code == "JHHRJ" and role_key == "ghost":
-            # ghost: 구슬프고 우울하고 한이 서린 처녀귀신 목소리
-            # 효과: 깊은 reverb + 강한 tremolo (울먹거림) + 낮은 pitch (어둡고 우울) + 느린 속도 + 고주파 필터링 + delay + equalizer
-            output_path = os.path.join(temp_dir, f"test_voice_processed_{os.getpid()}.wav")
-            # 오디오 필터 체인을 하나의 문자열로 합침
-            audio_filter = (
-                "asetrate=44100*0.92,aresample=44100,"  # pitch 낮춤 (더 어둡고 우울하게)
-                "atempo=0.95,"  # 속도 느리게 (더 구슬프게)
-                "lowpass=f=3000,"  # 고주파 필터링 (더 어둡고 깊게)
-                "aecho=1.0:0.9:120:0.5,"  # 깊고 긴 reverb (더 공허하고 처절하게)
-                "adelay=50|50,"  # 약간의 delay (에코 효과)
-                "tremolo=f=3.0:d=0.4,"  # 매우 강한 tremolo (더욱 울먹거리게)
-                "equalizer=f=200:width_type=h:width=300:g=2,"  # 저주파 강조 (더 깊고 묵직하게)
-                "equalizer=f=5000:width_type=h:width=2000:g=-3"  # 고주파 억제 (더 어둡게)
-            )
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", temp_input,
-                 "-af", audio_filter,
-                 output_path],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True
-            )
-        else:
-            # monster: reverb만 적용
-            output_path = os.path.join(temp_dir, f"test_voice_processed_{os.getpid()}.wav")
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", temp_input,
-                 "-af", "aecho=0.8:0.88:60:0.4",
-                 output_path],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True
-            )
-        try:
-            os.remove(temp_input)
-        except:
-            pass
-    elif book_code == "SCJ" and role_key == "simcheong":
-        # 심청: 어리고 명랑하고 결연에 가득 찬 목소리
-        # 효과: 높은 pitch (어리고 밝게) + 빠른 속도 (명랑함) + 고주파 강조 (맑고 밝게) + vibrato (생동감) + 저주파 억제 (가볍고 밝게)
-        output_path = os.path.join(temp_dir, f"test_voice_processed_{os.getpid()}.wav")
-        # 오디오 필터 체인을 하나의 문자열로 합침
-        audio_filter = (
-            "asetrate=44100*1.12,aresample=44100,"  # pitch 올림 (더 어리고 밝게)
-            "atempo=1.08,"  # 속도 빠르게 (명랑하고 활기차게)
-            "equalizer=f=3000:width_type=h:width=2000:g=3,"  # 고주파 강조 (맑고 밝게)
-            "equalizer=f=5000:width_type=h:width=1500:g=2,"  # 더 높은 고주파 강조 (명랑함)
-            "equalizer=f=200:width_type=h:width=300:g=-2,"  # 저주파 억제 (가볍고 밝게)
-            "vibrato=f=5.5:d=0.15,"  # 약간의 vibrato (생동감과 결연함)
-            "highpass=f=100"  # 매우 낮은 주파수 제거 (더 맑게)
-        )
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", temp_input,
-             "-af", audio_filter,
-             output_path],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True
-        )
-        try:
-            os.remove(temp_input)
-        except:
-            pass
-    elif book_code == "DGJ":
-        if role_key == "fox":
-            # 여우: 교활하고 가는 목소리, 간신배 느낌
-            # pitch를 약간 올려서 더 가늘게, tremolo를 약간 추가해서 교활한 느낌
-            output_path = os.path.join(temp_dir, f"test_voice_processed_{os.getpid()}.wav")
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", temp_input,
-                 "-af", "asetrate=44100*1.15,aresample=44100,tremolo=f=3.0:d=0.2",
-                 output_path],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True
-            )
-            try:
-                os.remove(temp_input)
-            except:
-                pass
-        elif role_key == "toad":
-            # 두꺼비: 현명하고 총명하고 뭉툭하고 묵직한 목소리
-            # pitch를 약간 낮춰서 더 묵직하게, bass boost로 더 깊고 뭉툭한 느낌
-            output_path = os.path.join(temp_dir, f"test_voice_processed_{os.getpid()}.wav")
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", temp_input,
-                 "-af", "asetrate=44100*0.9,aresample=44100,equalizer=f=100:width_type=h:width=200:g=3",
-                 output_path],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True
-            )
-            try:
-                os.remove(temp_input)
-            except:
-                pass
+    # 캐릭터 정보 딕셔너리 생성 (apply_audio_effects 함수에 필요한 형식)
+    char_dict = {
+        "book_code": book_code,
+        "role_key": role_key
+    }
+    
+    # 공통 함수로 오디오 효과 적용
+    try:
+        apply_audio_effects(char_dict, temp_input, output_path)
+        
+        # 파일이 완전히 생성될 때까지 대기 (최대 3초)
+        max_wait = 3.0
+        wait_interval = 0.1
+        waited = 0.0
+        while waited < max_wait:
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                # 파일이 안정화될 때까지 조금 더 대기
+                time.sleep(0.1)
+                break
+            time.sleep(wait_interval)
+            waited += wait_interval
+        
+        # 파일이 제대로 생성되었는지 확인
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            print(f"⚠️  오디오 효과 적용 실패, 원본 파일 사용")
+            output_path = temp_input
+    except Exception as e:
+        print(f"⚠️  오디오 효과 적용 중 오류 발생: {e}")
+        print(f"    원본 파일로 재생합니다.")
+        output_path = temp_input
     
     # 오디오 재생
     print(f"🔊 재생 중...")
-    subprocess.run(["afplay", output_path])
+    try:
+        # 파일이 존재하고 크기가 0이 아닌지 확인
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            subprocess.run(["afplay", output_path], check=True, timeout=30)
+        else:
+            print(f"❌ 오디오 파일이 생성되지 않았습니다.")
+            return
+    except subprocess.CalledProcessError as e:
+        print(f"❌ 오디오 재생 실패: {e}")
+        return
+    except Exception as e:
+        print(f"❌ 오디오 재생 중 오류 발생: {e}")
+        return
     
     # 임시 파일 삭제
     try:
-        os.remove(output_path)
+        if output_path != temp_input and os.path.exists(output_path):
+            os.remove(output_path)
+        if os.path.exists(temp_input):
+            os.remove(temp_input)
     except:
         pass
     

@@ -39,10 +39,10 @@
   },
   "BJBJ": {
     "book": "별주부전",
-    "background": "Underwater Palace of the Dragon King",
+    "background": "Underwater Palace of the 용왕",
     "interaction": "Swimming and exploring the mysterious underwater palace",
     "interaction_label": "fantasy_explore",
-    "interaction_summary": "A surreal journey into the Dragon King's realm—beautiful but dangerous. Wonder at the impossible sights, but growing unease as the trap becomes clear.",
+    "interaction_summary": "A surreal journey into the 용왕's realm—beautiful but dangerous. Wonder at the impossible sights, but growing unease as the trap becomes clear.",
     "interaction_emotions": [
       "wide-eyed wonder and amazement",
       "nervous excitement mixed with fear",
@@ -59,9 +59,9 @@
   "OGJJ": {
     "book": "옹고집전",
     "background": "Pagoda at the Temple",
-    "interaction": "Fighting fiercely - shouting, shoving, and wrestling",
+    "interaction": "Fighting fiercely against each other - shouting, shoving, and wrestling(Character1), fighting fiercely against each other - shouting, shoving, and wrestling(Character2)",
     "interaction_label": "fight",
-    "interaction_summary": "A heated brawl fueled by stubbornness and pride—voices raised, fists flying, shoving and wrestling. Neither side willing to back down, the conflict turning physical.",
+    "interaction_summary": "A heated one-on-one brawl between two characters—while others watch or stay away, these two are locked in combat. Voices raised, fists flying, shoving and wrestling. Neither side willing to back down, the conflict turning physical. They attack each other with hostile intent, each trying to overpower the other.",
     "interaction_emotions": [
       "explosive anger and frustration",
       "cold fury and bitter resentment",
@@ -72,13 +72,16 @@
       "tearful rage and betrayal",
       "weary exhaustion from conflict",
       "calculating manipulation",
-      "desperate plea hidden in shouts"
+      "desperate plea hidden in shouts",
+      "hostile aggression toward the opponent",
+      "determined intent to defeat the other",
+      "vicious attack and counter-attack"
     ]
   },
   "JWCJ": {
     "book": "전우치전",
     "background": "Mountains",
-    "interaction": "Leaping between mountain peaks with magic",
+    "interaction": "Leaping over mountain peaks(Character1), soaring through skies where mountain ranges stretch far into view(Character2)",
     "interaction_label": "magic_travel",
     "interaction_summary": "Soaring across the vast mountain range with Taoist magic—leaping from peak to peak, feeling the wind and freedom, surveying the world below like a wandering immortal.",
     "interaction_emotions": [
@@ -116,20 +119,20 @@
   "PSJ": {
     "book": "박씨전",
     "background": "Garden of the Noble House",
-    "interaction": "Flying freely through the clouds",
-    "interaction_label": "flying",
-    "interaction_summary": "A magical escape from earthly troubles—soaring above the world, leaving judgment and cruelty behind. The freedom of the sky, the beauty of clouds.",
+    "interaction": "Running around excitedly(Character1) or touching flowers(Character2)",
+    "interaction_label": "garden_explore",
+    "interaction_summary": "A moment of childlike wonder and freedom in the beautiful garden—touching delicate flowers, running through the paths with excitement, feeling the joy of being alive and free. The simple pleasure of exploring nature's beauty, away from judgment and cruelty.",
     "interaction_emotions": [
-      "pure joy and exhilaration",
-      "peaceful serenity and calm",
-      "liberating relief from troubles",
-      "awestruck wonder at the view",
-      "playful loops and spins",
-      "nervous vertigo and fear of falling",
-      "proud confidence in flight",
-      "bittersweet escape from reality",
-      "dreamy contentment",
-      "wild untamed freedom"
+      "pure joy and childlike excitement",
+      "wonder and fascination with flowers",
+      "playful energy and running around",
+      "peaceful contentment in nature",
+      "curious exploration of the garden",
+      "liberating sense of freedom",
+      "gentle touch and appreciation of beauty",
+      "excited discovery of new things",
+      "carefree happiness and delight",
+      "grateful relief from troubles"
     ]
   },
   "DGJ": {
@@ -154,20 +157,20 @@
   "KWJ": {
     "book": "김원전",
     "background": "Big Castle",
-    "interaction": "Gazing up at the towering castle and planning the approach",
-    "interaction_label": "observe_plan",
-    "interaction_summary": "Standing before a grand, towering castle—observing its massive walls, gates, and defenses. Analyzing the structure, planning how to enter, feeling both awe at its grandeur and determination to breach its walls.",
+    "interaction": "Preparing to embark on an adventure before the castle gates(Character1), or already waiting at the gates.(Character2)",
+    "interaction_label": "adventure_begin",
+    "interaction_summary": "The beginning of a great adventure—standing before the massive castle, feeling the excitement and anticipation of what lies ahead. Planning the journey, gathering courage, and taking the first step into the unknown with determination and hope.",
     "interaction_emotions": [
+      "excited anticipation of adventure",
+      "determined resolve to begin the journey",
+      "courageous first steps into the unknown",
+      "hopeful planning for what's ahead",
       "awe and wonder at the castle's grandeur",
-      "strategic calculation and observation",
-      "determined resolve to find a way in",
-      "curious fascination with the architecture",
-      "humble respect mixed with ambition",
-      "cautious assessment of dangers",
-      "excited anticipation of the challenge",
-      "solemn focus on the mission",
-      "anxious but determined planning",
-      "confident analysis of the fortress"
+      "curious fascination with the challenge",
+      "confident readiness to face obstacles",
+      "adventurous spirit and eagerness",
+      "thoughtful preparation and strategy",
+      "optimistic excitement for the mission"
     ]
   }
 }
